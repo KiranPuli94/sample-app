@@ -1,0 +1,8 @@
+__pycache__
+*.pyc
+.git
+.github
+.harness
+tests
+k8s
+README.md

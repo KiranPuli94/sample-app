@@ -1,0 +1,162 @@
+pipeline:
+  name: sample_app_deploy
+  identifier: sample_app_deploy
+  projectIdentifier: <YOUR_PROJECT_ID>
+  orgIdentifier: <YOUR_ORG_ID>
+  tags: {}
+  variables:
+    - name: image_tag
+      type: String
+      description: "Image tag pushed by GitHub Actions"
+      value: <+input>
+
+  stages:
+    # ── DEV ────────────────────────────────────────────
+    - stage:
+        name: Deploy to Dev
+        identifier: deploy_dev
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            serviceRef: sample_app_service
+            serviceInputs:
+              serviceDefinition:
+                type: Kubernetes
+                spec:
+                  artifacts:
+                    primary:
+                      primaryArtifactRef: <+input>
+                      sources:
+                        - identifier: jfrog_image
+                          type: ArtifactoryRegistry
+                          spec:
+                            tag: <+pipeline.variables.image_tag>
+          environment:
+            environmentRef: dev
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: dev_k8s
+          execution:
+            steps:
+              - step:
+                  name: Rolling Deploy
+                  identifier: rolloutDeployment
+                  type: K8sRollingDeploy
+                  timeout: 10m
+                  spec:
+                    skipDryRun: false
+            rollbackSteps:
+              - step:
+                  name: Rollback Rolling
+                  identifier: rollbackRolloutDeployment
+                  type: K8sRollingRollback
+                  timeout: 10m
+                  spec: {}
+
+    # ── QA (Canary) ───────────────────────────────────
+    - stage:
+        name: Deploy to QA (Canary)
+        identifier: deploy_qa
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            useFromStage:
+              stage: deploy_dev
+          environment:
+            environmentRef: qa
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: qa_k8s
+          execution:
+            steps:
+              - step:
+                  name: Canary 25%
+                  identifier: canaryDeploy
+                  type: K8sCanaryDeploy
+                  timeout: 10m
+                  spec:
+                    instanceSelection:
+                      type: Percentage
+                      spec:
+                        percentage: 25
+              - step:
+                  name: Canary Delete
+                  identifier: canaryDelete
+                  type: K8sCanaryDelete
+                  timeout: 10m
+                  spec: {}
+              - step:
+                  name: Rolling Promote
+                  identifier: rolloutDeployment
+                  type: K8sRollingDeploy
+                  timeout: 10m
+                  spec:
+                    skipDryRun: false
+            rollbackSteps:
+              - step:
+                  name: Rollback
+                  identifier: rollbackRolloutDeployment
+                  type: K8sRollingRollback
+                  timeout: 10m
+                  spec: {}
+
+    # ── PROD (Approval + Blue-Green) ──────────────────
+    - stage:
+        name: Approval
+        identifier: prod_approval
+        type: Approval
+        spec:
+          execution:
+            steps:
+              - step:
+                  name: Approve Prod Release
+                  identifier: prodApproval
+                  type: HarnessApproval
+                  timeout: 1d
+                  spec:
+                    approvalMessage: "Approve deployment of <+pipeline.variables.image_tag> to Prod"
+                    includePipelineExecutionHistory: true
+                    approvers:
+                      userGroups:
+                        - prod_approvers
+                      minimumCount: 1
+                      disallowPipelineExecutor: false
+
+    - stage:
+        name: Deploy to Prod (Blue-Green)
+        identifier: deploy_prod
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            useFromStage:
+              stage: deploy_dev
+          environment:
+            environmentRef: prod
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: prod_k8s
+          execution:
+            steps:
+              - step:
+                  name: Blue-Green Deploy
+                  identifier: blueGreenDeploy
+                  type: K8sBlueGreenDeploy
+                  timeout: 15m
+                  spec:
+                    skipDryRun: false
+              - step:
+                  name: Swap Services
+                  identifier: bgSwapServices
+                  type: K8sBGSwapServices
+                  timeout: 10m
+                  spec: {}
+            rollbackSteps:
+              - step:
+                  name: Rollback BG
+                  identifier: rollbackBG
+                  type: K8sBGSwapServices
+                  timeout: 10m
+                  spec: {}
