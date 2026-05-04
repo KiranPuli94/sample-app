@@ -3,20 +3,14 @@ name: CI - Build, Scan, Publish, Trigger CD
 on:
   push:
     branches: [main]
-    paths:
-      - 'sample-app/**'
-      - '.github/workflows/ci.yml'
   pull_request:
     branches: [main]
-    paths:
-      - 'sample-app/**'
   workflow_dispatch:
 
 env:
   JFROG_URL: ${{ vars.JFROG_URL }}                # e.g. https://mycorp.jfrog.io
   JFROG_DOCKER_REPO: docker-sample-local           # Artifactory repo key
   IMAGE_NAME: sample-app
-  WORKDIR: sample-app
 
 permissions:
   contents: read
@@ -27,9 +21,6 @@ jobs:
   test:
     name: Lint & Unit Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: sample-app
     steps:
       - uses: actions/checkout@v4
 
@@ -37,7 +28,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: sample-app/app/requirements.txt
+          cache-dependency-path: app/requirements.txt
 
       - name: Install dependencies
         run: pip install -r app/requirements.txt
@@ -46,16 +37,14 @@ jobs:
         run: pytest -v
 
   # ──────────────────────────────────────────
+  # Skips automatically if JFROG_URL repo variable is not configured.
   build-publish:
     name: Build, Scan & Publish to JFrog
     needs: test
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && vars.JFROG_URL != ''
     runs-on: ubuntu-latest
     outputs:
       image_tag: ${{ steps.meta.outputs.tag }}
-    defaults:
-      run:
-        working-directory: sample-app
     steps:
       - uses: actions/checkout@v4
 
@@ -95,10 +84,11 @@ jobs:
         run: jf build-scan ${{ env.IMAGE_NAME }} ${{ github.run_number }} --fail=true
 
   # ──────────────────────────────────────────
+  # Skips automatically if HARNESS_ACCOUNT_ID repo variable is not configured.
   trigger-harness:
     name: Trigger Harness Deployment
     needs: build-publish
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && vars.HARNESS_ACCOUNT_ID != ''
     runs-on: ubuntu-latest
     steps:
       - name: Kick off Harness pipeline
